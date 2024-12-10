@@ -26,7 +26,7 @@ def transf_matrix(R, t):
     return T
 
 def get_matches(index, images, ratio_thresh, k = 1):
-    orb = cv2.ORB_create(3000)
+    orb = cv2.ORB_create(10000)
 
     # Compute keypoints and descriptors for previous and current images
     kp1, des1 = orb.detectAndCompute(images[index - k], None)
@@ -49,9 +49,9 @@ def get_matches(index, images, ratio_thresh, k = 1):
     flann = cv2.FlannBasedMatcher(index_params, search_params)
 
     # Perform KNN matching with k=2
-    matches = flann.knnMatch(des1, des2, k=2)
+    matches = flann.knnMatch(des1, des2, k = 2)
 
-    # Apply Lowe's ratio test to filter good matches
+    # Lowe's ratio test to find out the bad matches
     good_matches = []
     for m_n in matches:
         if len(m_n) == 2:
@@ -59,60 +59,20 @@ def get_matches(index, images, ratio_thresh, k = 1):
             if m.distance < ratio_thresh * n.distance:
                 good_matches.append(m)
 
-    # Extract matched keypoints coordinates
     q1 = np.float32([kp1[m.queryIdx].pt for m in good_matches])
     q2 = np.float32([kp2[m.trainIdx].pt for m in good_matches])
 
     return q1, q2
 
 def get_pose(q1, q2, K):
-    E, _ = cv2.findEssentialMat(q1, q2, K, threshold = 1)
+    E, _ = cv2.findEssentialMat(q1, q2, K, method=cv2.RANSAC, prob=0.999, threshold = 1)
     _, R, t, _ = cv2.recoverPose(E, q1, q2, focal = 256, pp = (256, 256))
 
     return transf_matrix(R, np.squeeze(t))
 
-def robust_align_trajectory(gt_path, estimated_path, num_points=5):
-    """
-    Align estimated trajectory to ground truth using multiple points for a robust transformation.
-    """
-    gt_path = np.array(gt_path)
-    estimated_path = np.array(estimated_path)
-    
-    # Use the first `num_points` points from both trajectories for alignment
-    gt_subset = gt_path[:num_points]
-    est_subset = estimated_path[:num_points]
-    
-    # Compute centroids of the subsets
-    gt_centroid = np.mean(gt_subset, axis=0)
-    est_centroid = np.mean(est_subset, axis=0)
-    
-    # Subtract centroids to center the points
-    gt_centered = gt_subset - gt_centroid
-    est_centered = est_subset - est_centroid
-    
-    # Compute the optimal rotation using SVD
-    H = est_centered.T @ gt_centered
-    U, _, Vt = np.linalg.svd(H)
-    R = Vt.T @ U.T
-    
-    # Ensure a proper rotation (det(R) = 1)
-    if np.linalg.det(R) < 0:
-        Vt[-1, :] *= -1
-        R = Vt.T @ U.T
-    
-    # Compute translation
-    t = gt_centroid - R @ est_centroid
-    
-    # Apply the transformation to the entire estimated trajectory
-    estimated_path_aligned = (R @ estimated_path.T).T + t
-    
-    return estimated_path_aligned
-
-
 K = np.array([[256,     0,      256],
               [0,       256,    256],
               [0,       0,      1]])
-
 
 # Selecting test 0
 GT_poses = load_poses("GT_poses/0.txt")
@@ -120,7 +80,7 @@ images = load_images("images/0")
 
 GT_path = []
 estimated_path = []
-ratio_tresh = 0.7
+ratio_tresh = 1
 scale_factor = 1
 
 for i in range(len(images)):
@@ -131,16 +91,15 @@ for i in range(len(images)):
         GT_path.append((GT_pose[0, 3], GT_pose[1, 3], GT_pose[2, 3])) # update GT path
     else:
         q1, q2 = get_matches(i, images, ratio_tresh)
-        transf = get_pose(q2, q1, K)
+
+        transf = get_pose(q1, q2, K)
 
         transf[:3, 3] *= scale_factor # scale the estimated translation
 
-        cur_pose = np.matmul(cur_pose, transf) # update cur_pose
+        cur_pose = np.dot(cur_pose, transf) # update cur_pose
         GT_path.append((GT_poses[i][0, 3], GT_poses[i][1, 3], GT_poses[i][2, 3]))  # update GT path
 
     estimated_path.append((cur_pose[0, 3], cur_pose[1, 3], cur_pose[2, 3]))
-
-#estimated_path = robust_align_trajectory(GT_path, estimated_path, 40)
 
 # Separating the x, y, and z coordinates
 est_x = [point[0] for point in estimated_path]
