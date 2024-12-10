@@ -1,1 +1,1 @@
-# Bendik-s-and-Viet-s-Project-Thesis
+# Bendik's and Viet's Project Thesis
